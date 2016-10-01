@@ -1,0 +1,171 @@
+#!/bin/bash
+# Run a shell with only privileges over the current directory, meant for builds
+
+# Usage info
+show_help() {
+	cat << EOF
+Usage: ${0##*/} [-h] [-q] [-c COMMAND] [-u USER] [-g GROUPS]
+Execute COMMAND as USER with temporary privileges over the current directory.
+
+    -h         Display this help and exit.
+    -q         Do not generate verbose messages.
+    -c COMMAND Specify a command to execute. The default is: ${cmd}.
+    -u USER    Specify a user to use. A random temporary user is created/destroyed when unspecified.
+    -g GROUPS  Specify supplemental groups to give the user when executing COMMAND, comma separated. Defaults to ${suppl_groups}.
+
+Note that '-g ""' can be used to prevent giving the user group privileges.
+The default is useful to prevent the need for a fake directory tree and give
+read access to bashrc. This assumes you have sane group priviliges that are
+mostly read-only.
+
+The defaults will launch a shell as a random user with full priviliges over the
+current directory. The ownership of any created files will be changed to
+${cur_user} at the end of the session.
+
+The intended use of this utility is for root users to conveniently run builds in
+their home directories without the possibility of wrecking the whole system.
+
+Do NOT run this utility in a high level directory with lots of files underneath
+it. Permissions must be given for each file recursively and it could take some
+time to complete.
+
+EOF
+}
+
+failure() {
+	echo "An unexpected failure occurred, exiting..."
+	exit 1
+}
+
+recursive_umount() {
+	grep --color=never "${1}" /proc/mounts | cut -f2 -d" " | sort -r | xargs umount -ln &>/dev/null
+	umount "${1}" &>/dev/null
+	umount --fake "${1}" &>/dev/null
+}
+
+# System check
+command -v setfacl >/dev/null 2>&1 || { echo "${0##*/} requires setfacl but it is not installed.  Aborting." >&2; exit 1; }
+
+# Being part of root group can allow this to work in most cases
+cmd="/bin/bash --rcfile $(realpath ~/.bashrc)"
+directory=${PWD}
+verbose=true
+random_user=true
+user=""
+# Almost certainly "root", but it doesn't hurt to be sure
+cur_user=$(whoami)
+suppl_groups="${cur_user}"
+
+OPTIND=1
+while getopts "hqc:u:g:" opt; do
+	case "${opt}" in
+		h)
+			show_help
+			exit 0
+			;;
+		q)
+			verbose=false
+			;;
+		c)
+			cmd=${OPTARG}
+			;;
+		u)
+			random_user=false
+			user=${OPTARG}
+			;;
+		g)
+			suppl_groups=${OPTARG}
+			;;
+		'?')
+			show_help >&2
+			exit 1
+			;;
+	esac
+done
+shift "$((OPTIND-1))" # Shift off the options and optional --.
+
+# Create random user
+if [ "${random_user}" = true ] ; then
+	# Create a random unprivileged system user and group
+	user=$(tr -dc '[:lower:]' < /dev/urandom | fold -w 31 | head -n 1)
+	${verbose} && echo "Creating random user ${user}..."
+	useradd -rU "${user}"
+fi
+
+# Use UID/GID, apparently 32 bit chroot fails to use names http://unix.stackexchange.com/questions/37712/chroot-fails-with-userspec-when-chroot-is-i686
+user_uid=$(id -u "${user}")
+user_gid=$(id -g "${user}")
+
+# If the directory path contains untraversable directories (no execute bit), 
+# than just giving permissions on the directory will not work when absolute 
+# paths are used, which will screw up some build systems.
+# Rather than compromise security by allowing the user execute permissions on
+# the path directories, use a bindmount/chroot to fake the untraversable path
+
+# Find the topmost untraversable directory.
+root_dir="/"
+untraversable=""
+parent="${directory}/foo"
+while [ "${parent}" != "/" ]; do
+	parent=$(dirname "${parent}")
+	if ! chroot --userspec="${user_uid}:${user_gid}" --groups="${user_gid},${suppl_groups}" "${root_dir}" /bin/bash -c "cd ${parent}" &>/dev/null; then
+		untraversable="${parent}"
+	fi
+done
+
+# If an untraverable path exists
+if [ -n "${untraversable}" ]; then
+	${verbose} && echo "Path ${untraversable} is untraversable, faking path past that point..."
+
+	workdir="/tmp/moot-$$"
+	root_dir="${workdir}/root_dir"
+
+	mkdir -m 700 "${workdir}"
+	mkdir -m 700 "${workdir}/fake_dir"
+	mkdir -m 700 "${workdir}/root_dir"
+	(umask 077; mkdir -p "${workdir}/fake_dir/${directory}")
+	setfacl -Rm u:"${user}":rX,d:u:"${user}":rX "${workdir}" || failure
+
+	mount --rbind "${directory}" "${workdir}/fake_dir/${directory}"
+	mount --rbind "/" "${workdir}/root_dir"
+	mount --rbind "${workdir}/fake_dir/${untraversable}" "${workdir}/root_dir/${untraversable}"
+fi
+
+${verbose} && echo "Giving ${user} read/write and conditional execute permissions on ${directory} and its contents..."
+setfacl -Rm u:"${user}":rwX,d:u:"${user}":rwX "${directory}" || failure
+
+${verbose} && echo "Launching ${cmd} as ${user}"
+
+# Cannot use || failure here as it triggers "failure" if last command in the shell was false.
+chroot --userspec="${user_uid}:${user_gid}" --groups="${user_gid},${suppl_groups}" "${root_dir}" /bin/bash -c "cd ${directory} && ${cmd}"
+
+if [ -n "${untraversable}" ]; then
+	${verbose} && echo "Removing fake path..."
+
+	recursive_umount "${workdir}/root_dir/${untraversable}"
+	recursive_umount "${workdir}/root_dir"
+	recursive_umount "${workdir}/fake_dir/${directory}"
+
+	rmdir "${workdir}/root_dir"
+	(cd "${workdir}" && rmdir -p "fake_dir/${directory}")
+	rmdir "${workdir}"
+fi
+
+${verbose} && echo "Revoking the permissions of ${user} on ${directory} and its contents..."
+setfacl -Rx u:"${user}",d:u:"${user}" "${directory}" || failure
+# Get rid of automatically created entries if they were created
+# Failure is fine, mask still needed if there were other users
+setfacl -Rx m "${directory}" >/dev/null 2>&1
+setfacl -Rx d:m,d:u,d:g,d:o "${directory}" >/dev/null 2>&1
+
+${verbose} && echo "Changing the ownership of files created by ${user} to ${cur_user}..."
+# Find any newly created files and change ownership back to the current user
+find "${directory}" -user "${user}" -exec chown "${cur_user}:${cur_user}" {} +
+
+# Remove random user
+if [ "${random_user}" = true ] ; then
+	${verbose} && echo "Removing user ${user}..."
+	userdel "${user}"
+fi
+
+exit 0

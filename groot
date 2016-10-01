@@ -1,0 +1,60 @@
+#!/bin/bash
+# Run a shell as root without programs knowing of your rootness.
+
+# Usage info
+show_help() {
+	cat << EOF
+
+TODO: Write help.
+
+EOF
+}
+
+failure() {
+	echo "An unexpected failure occurred, exiting..."
+	exit 1
+}
+
+function bash_unroot {
+	# Unset bash "read-only" variables
+	cat << EOF | gdb >/dev/null 2>&1
+attach $$
+call unbind_variable("UID")
+call unbind_variable("EUID")
+detach
+EOF
+	export UID=1
+	export EUID=1
+}
+
+cmd="/bin/bash --rcfile $(realpath ~/.bashrc)"
+
+OPTIND=1
+while getopts "hqc:u:g:" opt; do
+	case "${opt}" in
+		h)
+			show_help
+			exit 0
+			;;
+		q)
+			verbose=false
+			;;
+		c)
+			cmd=${OPTARG}
+			;;
+		'?')
+			show_help >&2
+			exit 1
+			;;
+	esac
+done
+shift "$((OPTIND-1))" # Shift off the options and optional --.
+
+
+${verbose} && echo "Setting bash \$UID and \$EUID..."
+bash_unroot
+
+${verbose} && echo "Launching ${cmd} with uid and euid hooks..."
+LD_PRELOAD=/usr/local/lib/libgroot.so /bin/bash -c "${cmd}"
+
+exit 0
