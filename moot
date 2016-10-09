@@ -120,11 +120,11 @@ if [ -n "${untraversable}" ]; then
 	workdir="/tmp/moot-$$"
 	root_dir="${workdir}/root_dir"
 
-	mkdir -m 700 "${workdir}"
-	mkdir -m 700 "${workdir}/fake_dir"
-	mkdir -m 700 "${workdir}/root_dir"
-	(umask 077; mkdir -p "${workdir}/fake_dir/${directory}")
-	setfacl -Rm u:"${user}":rX,d:u:"${user}":rX "${workdir}" || failure
+	mkdir -m 750 "${workdir}"
+	mkdir -m 750 "${workdir}/fake_dir"
+	mkdir -m 750 "${workdir}/root_dir"
+	(umask 027; mkdir -p "${workdir}/fake_dir/${directory}")
+	chgrp -R "${user}" "${workdir}"
 
 	mount --rbind "${directory}" "${workdir}/fake_dir/${directory}"
 	mount --rbind "/" "${workdir}/root_dir"
