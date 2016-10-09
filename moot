@@ -136,7 +136,14 @@ setfacl -Rm u:"${user}":rwX,d:u:"${user}":rwX "${directory}" || failure
 
 ${verbose} && echo "Launching ${cmd} as ${user}"
 
+if [ -f /usr/local/lib/libuid.so ]; then
+	LIBUID_LOCATION=/usr/local/lib/libuid.so
+else
+	LIBUID_LOCATION=/lib/libuid.so
+fi
+
 # Cannot use || failure here as it triggers "failure" if last command in the shell was false.
+# LD_PRELOAD=${LIBUID_LOCATION} LIBUID_EUID=0 LIBUID_UID=0 
 chroot --userspec="${user_uid}:${user_gid}" --groups="${user_gid},${suppl_groups}" "${root_dir}" /bin/bash -c "cd ${directory} && ${cmd}"
 
 if [ -n "${untraversable}" ]; then

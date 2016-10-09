@@ -51,27 +51,31 @@ INSTALL_DATA ?= ${INSTALL} -m 644
 
 MKDIR_P ?= mkdir -p
 
-CFLAGS = -fPIC
+CFLAGS = -fPIC -DPREFIX_PATH='"$(prefix)"'
 
 .PHONY: all install uninstall clean
 
-all: moot groot libuid.so
+all: moot groot uid.conf libuid.so
 
 print-%: ; @echo $*=$($*)
 
-install:
+install: all
 	$(INSTALL_PROGRAM) moot $(DESTDIR)$(bindir)/moot
 	$(INSTALL_PROGRAM) groot $(DESTDIR)$(bindir)/groot
 	$(INSTALL_PROGRAM) libuid.so $(DESTDIR)$(libdir)/libuid.so
+	$(INSTALL_DATA) uid.conf $(DESTDIR)$(sysconfdir)/uid.conf
 
 uninstall:
 	-rm -f $(DESTDIR)$(bindir)/moot
+	-rm -f $(DESTDIR)$(bindir)/groot
+	-rm -f $(DESTDIR)$(libdir)/libuid.so
+	-rm -f $(DESTDIR)$(sysconfdir)/uid.conf
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
 
 %.so: %.o
-	$(CC) -shared $^ -o $@
+	$(CC) -ldl -shared $^ -o $@
 
 libuid.so: libuid.o
 

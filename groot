@@ -4,8 +4,22 @@
 # Usage info
 show_help() {
 	cat << EOF
+Usage: ${0##*/} [-h] [-q] [-c COMMAND]
+Execute shell or COMMAND without complaints about using superuser.
 
-TODO: Write help.
+    -h         Display this help and exit.
+    -q         Do not generate verbose messages.
+    -c COMMAND Specify a command to execute. The default is: ${cmd}.
+
+By default, 'groot' will launch a bash shell in which the UID and EUID 
+environment variables are set to '1'. Bash scripts checking these variables, 
+that would normally complain when run as root, should cease to complain.
+
+groot also overrides 'getuid' and 'geteuid' calls from all programs launched.
+By default, the real results are given, but can be overridden for individual 
+programs via the configuration file /etc/uid.conf. The format of each line being
+the program invocation short name, followed by the uid that should be faked, 
+followed by the euid that should be faked.
 
 EOF
 }
@@ -54,7 +68,14 @@ shift "$((OPTIND-1))" # Shift off the options and optional --.
 ${verbose} && echo "Setting bash \$UID and \$EUID..."
 bash_unroot
 
+if [ -f /usr/local/lib/libuid.so ]; then
+	LIBUID_LOCATION=/usr/local/lib/libuid.so
+else
+	LIBUID_LOCATION=/lib/libuid.so
+fi
+
 ${verbose} && echo "Launching ${cmd} with uid and euid hooks..."
-LD_PRELOAD=/usr/local/lib/libgroot.so /bin/bash -c "${cmd}"
+#LIBUID_VERBOSE= LD_PRELOAD=${LIBUID_LOCATION} /bin/bash -c "${cmd}"
+LD_PRELOAD=${LIBUID_LOCATION} /bin/bash -c "${cmd}"
 
 exit 0
