@@ -43,9 +43,6 @@ recursive_umount() {
 	umount --fake "${1}" &>/dev/null
 }
 
-# System check
-command -v setfacl >/dev/null 2>&1 || { echo "${0##*/} requires setfacl but it is not installed.  Aborting." >&2; exit 1; }
-
 # Being part of root group can allow this to work in most cases
 cmd="/bin/bash --rcfile $(realpath ~/.bashrc)"
 directory=${PWD}
@@ -131,19 +128,12 @@ if [ -n "${untraversable}" ]; then
 	mount --rbind "${workdir}/fake_dir/${untraversable}" "${workdir}/root_dir/${untraversable}"
 fi
 
-${verbose} && echo "Giving ${user} read/write and conditional execute permissions on ${directory} and its contents..."
-setfacl -Rm u:"${user}":rwX,d:u:"${user}":rwX "${directory}" || failure
+${verbose} && echo "Giving ${user} ownership of ${directory} and its contents..."
+chown -R "${user}:${user}" "${directory}"
 
 ${verbose} && echo "Launching ${cmd} as ${user}"
 
-if [ -f /usr/local/lib/libuid.so ]; then
-	LIBUID_LOCATION=/usr/local/lib/libuid.so
-else
-	LIBUID_LOCATION=/lib/libuid.so
-fi
-
 # Cannot use || failure here as it triggers "failure" if last command in the shell was false.
-# LD_PRELOAD=${LIBUID_LOCATION} LIBUID_EUID=0 LIBUID_UID=0 
 chroot --userspec="${user_uid}:${user_gid}" --groups="${user_gid},${suppl_groups}" "${root_dir}" /bin/bash -c "cd ${directory} && ${cmd}"
 
 if [ -n "${untraversable}" ]; then
@@ -158,16 +148,9 @@ if [ -n "${untraversable}" ]; then
 	rmdir "${workdir}"
 fi
 
-${verbose} && echo "Revoking the permissions of ${user} on ${directory} and its contents..."
-setfacl -Rx u:"${user}",d:u:"${user}" "${directory}" || failure
-# Get rid of automatically created entries if they were created
-# Failure is fine, mask still needed if there were other users
-setfacl -Rx m "${directory}" >/dev/null 2>&1
-setfacl -Rx d:m,d:u,d:g,d:o "${directory}" >/dev/null 2>&1
-
-${verbose} && echo "Changing the ownership of files created by ${user} to ${cur_user}..."
+${verbose} && echo "Changing the ownership back to ${cur_user}..."
 # Find any newly created files and change ownership back to the current user
-find "${directory}" -user "${user}" -exec chown "${cur_user}:${cur_user}" {} +
+chown -R "${cur_user}:${cur_user}" "${directory}"
 
 # Remove random user
 if [ "${random_user}" = true ] ; then
