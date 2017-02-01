@@ -101,7 +101,7 @@ shift "$((OPTIND-1))" # Shift off the options and optional --.
 # Create random user
 if [ "${random_user}" = true ] ; then
 	# Create a random unprivileged system user and group
-	user=$(tr -dc '[:lower:]' < /dev/urandom | fold -w 31 | head -n 1)
+	user=$(tr -dc 'a-z' < /dev/urandom | fold -w 31 | head -n 1)
 	${verbose} && echo "Creating random user ${user}..."
 	useradd -rU "${user}"
 fi
